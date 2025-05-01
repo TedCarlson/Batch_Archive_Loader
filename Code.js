@@ -1,7 +1,12 @@
 function batchGenerateAndArchive() {
   Logger.log("🚀 Starting batch archive load...");
 
-  loadOntracToArchive(); // updated name
+  const batchID = generateBatchID();
+  const defaultFM = getFiscalMonth(new Date());
+  const fiscalMonth = promptForFiscalMonth(defaultFM);
+
+  loadOntracToArchive(batchID, fiscalMonth);
+  deduplicateArchive();
 
   Logger.log("✅ Batch archive load complete.");
 }
@@ -19,6 +24,36 @@ function testBatchID() {
 
   Logger.log(msg);
 }
+
+function getFiscalMonth(date) {
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return "Invalid Date";
+
+
+  const year = d.getFullYear();
+  let month = d.getMonth();
+  const day = d.getDate();
+
+
+  if (day >= 22) month += 1;
+  if (month > 11) {
+    month = 0;
+    return `${year + 1}-01`;  // Use backticks here
+  }
+
+
+  const monthStr = ('0' + (month + 1)).slice(-2);
+  return `${year}-${monthStr}`;  // And here
+  
+}
+
+function testFiscalMonth() {
+  const now = new Date();
+  const fiscalMonth = getFiscalMonth(now);
+  Logger.log(`🧪 Current date: ${now.toDateString()}`);
+  Logger.log(`🗓 Fiscal month: ${fiscalMonth}`);
+}
+
 
 function listOntracTabs() {
   const sourceSheetId = "1hLx5vKUsnKvCaa5Xu-UgGWG_2zzX0V6em1jmumnx7Ko";
@@ -96,8 +131,7 @@ function auditOntracHeaders() {
   });
 }
 
-function loadOntracToArchive() {
-  const batchID = generateBatchID();
+function loadOntracToArchive(batchID, fiscalMonth) {
   const sourceSheetId = "1hLx5vKUsnKvCaa5Xu-UgGWG_2zzX0V6em1jmumnx7Ko";
   const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
 
@@ -113,26 +147,25 @@ function loadOntracToArchive() {
     .map(sheet => sheet.getName())
     .filter(name => name.startsWith("Ontrac_"));
 
-  let totalAdded = 0;
   let allRows = [];
 
   ontracTabs.forEach(tabName => {
     const sheet = sourceSS.getSheetByName(tabName);
     const { source, region } = extractMetadata(tabName);
     const lastRow = sheet.getLastRow();
-    const numRows = Math.max(0, lastRow - 2); // Skip 2 header rows
+    const numRows = Math.max(0, lastRow - 2);
 
     if (numRows === 0) return;
 
     const techIDs = sheet.getRange(3, 1, numRows, 1).getValues(); // Col A
-    const data = sheet.getRange(3, 2, numRows, 33).getValues();   // Col B to AH
+    const data = sheet.getRange(3, 2, numRows, 33).getValues();   // Col B–AH
 
     for (let i = 0; i < numRows; i++) {
       const techID = techIDs[i][0];
       if (!techID) continue;
 
       const uniqueKey = `${batchID}_${region}_${techID}`;
-      const row = [batchID, region, source, techID, uniqueKey, ...data[i]];
+      const row = [batchID, fiscalMonth, region, source, techID, uniqueKey, ...data[i]];
       allRows.push(row);
     }
 
@@ -148,3 +181,114 @@ function loadOntracToArchive() {
     Logger.log("⚠️ No rows to write.");
   }
 }
+
+function deduplicateArchive() {
+  const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
+  const ss = SpreadsheetApp.openById(targetSheetId);
+  const sheet = ss.getSheetByName("Archive_Test");
+
+  if (!sheet) throw new Error("❌ 'Archive_Test' not found.");
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    Logger.log("⚠️ Archive_Test has no data rows.");
+    return;
+  }
+
+  const headers = data[0];
+  const rows = data.slice(1); // skip header row
+  const keyMap = new Map();
+
+  rows.forEach(row => {
+    const batchID = row[0];     // e.g., "20250501_161045"
+    const region = row[1];
+    const techID = row[3];
+
+    const dateOnly = batchID.split("_")[0];  // "20250501"
+    const dedupeKey = `${region}_${techID}_${dateOnly}`;
+
+    const existing = keyMap.get(dedupeKey);
+    if (!existing || batchID > existing[0]) {
+      keyMap.set(dedupeKey, row);
+    }
+  });
+
+  const deduped = Array.from(keyMap.values());
+  deduped.unshift(headers); // reinsert headers
+
+  sheet.clearContents();
+  sheet.getRange(1, 1, deduped.length, deduped[0].length).setValues(deduped);
+
+  const removed = rows.length - keyMap.size;
+  Logger.log(`🧹 Deduplication complete. Removed ${removed} duplicate row(s). Kept ${keyMap.size}.`);
+}
+
+function injectArchiveHeaders() {
+  const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
+  const sheet = SpreadsheetApp.openById(targetSheetId).getSheetByName("Archive_Test");
+
+  if (!sheet) throw new Error("❌ 'Archive_Test' not found.");
+
+  const headers = [
+    "BatchID", "Region", "Source", "TechID", "UniqueKey",
+    "TechName", "Supervisor", "Total Jobs", "Installs", "TCs", "SROs",
+    "TUResult", "TUEligibleJobs", "ToolUsage",
+    "Promoters", "Detractors", "tNPS Surveys", "tNPS Rate",
+    "FTRFailJobs", "Total FTR/Contact Jobs", "FTR%",
+    "48Hr Contact Orders", "48Hr Contact Rate%",
+    "PHT Jobs", "PHT Pure Pass", "PHT Fails", "PHT RTM", "PHT Pass%", "PHT Pure Pass%",
+    "TotalAppts", "TotalMetAppts", "MetRate",
+    "Rework Count", "Rework Rate%", "SOI Count", "SOI Rate%", "Repeat Count", "Repeat Rate%"
+  ];
+
+  // Overwrite row 1
+  sheet.insertRows(1);
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+
+  Logger.log("🧾 Header row injected at the top of Archive_Test.");
+}
+
+
+
+//Helper functions follow
+
+function promptForFiscalMonth(defaultFM) {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    'Enter Fiscal Month (YYYY-MM)',
+    `Default: ${defaultFM}. Leave blank or click Cancel to use it.`,
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    Logger.log(`ℹ️ User cancelled input. Using default: ${defaultFM}`);
+    return defaultFM;
+  }
+
+  const input = response.getResponseText().trim();
+  const isValid = /^\d{4}-\d{2}$/.test(input);
+
+  if (isValid) {
+    Logger.log(`🗓 Fiscal Month manually set to: ${input}`);
+    return input;
+  } else {
+    Logger.log(`⚠️ Invalid or blank input. Using default: ${defaultFM}`);
+    return defaultFM;
+  }
+}
+
+function previewAndRunLoader() {
+  const batchID = generateBatchID();
+  const defaultFM = getFiscalMonth(new Date());
+  const fiscalMonth = promptForFiscalMonth(defaultFM);
+
+  Logger.log(`🧪 Batch ID: ${batchID}`);
+  Logger.log(`🗓 Fiscal Month: ${fiscalMonth}`);
+
+  loadOntracToArchive(batchID, fiscalMonth);
+  deduplicateArchive();
+
+  Logger.log("✅ Full loader run with manual input complete.");
+}
+
+
