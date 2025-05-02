@@ -11,7 +11,6 @@ function batchGenerateAndArchive() {
   Logger.log("✅ Batch archive load complete.");
 }
 
-
 function generateBatchID() {
   const now = new Date();
   const formatted = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
@@ -53,7 +52,6 @@ function testFiscalMonth() {
   Logger.log(`🧪 Current date: ${now.toDateString()}`);
   Logger.log(`🗓 Fiscal month: ${fiscalMonth}`);
 }
-
 
 function listOntracTabs() {
   const sourceSheetId = "1hLx5vKUsnKvCaa5Xu-UgGWG_2zzX0V6em1jmumnx7Ko";
@@ -173,10 +171,10 @@ function loadOntracToArchive(batchID, fiscalMonth) {
   });
 
   if (allRows.length > 0) {
-    const startRow = archiveSheet.getLastRow() + 1;
-    archiveSheet.insertRowsAfter(startRow, allRows.length);
-    archiveSheet.getRange(startRow + 1, 1, allRows.length, allRows[0].length).setValues(allRows);
-    Logger.log(`🧪 Archive Load Complete: ${allRows.length} total rows written.`);
+  const startRow = archiveSheet.getLastRow();
+  archiveSheet.insertRowsAfter(startRow, allRows.length);
+  archiveSheet.getRange(startRow + 1, 1, allRows.length, allRows[0].length).setValues(allRows);
+  Logger.log(`🧪 Archive Load Complete: ${allRows.length} total rows written.`); 
   } else {
     Logger.log("⚠️ No rows to write.");
   }
@@ -196,32 +194,30 @@ function deduplicateArchive() {
   }
 
   const headers = data[0];
-  const rows = data.slice(1); // skip header row
+  const rows = data.slice(1); // skip headers
   const keyMap = new Map();
 
   rows.forEach(row => {
-    const batchID = row[0];     // e.g., "20250501_161045"
-    const region = row[1];
-    const techID = row[3];
+    const batchID = row[0];       // Col A
+    const uniqueKey = row[5];     // Col F (BatchID, FiscalMonth, Region, Source, TechID, UniqueKey...)
 
-    const dateOnly = batchID.split("_")[0];  // "20250501"
-    const dedupeKey = `${region}_${techID}_${dateOnly}`;
-
-    const existing = keyMap.get(dedupeKey);
+    const existing = keyMap.get(uniqueKey);
     if (!existing || batchID > existing[0]) {
-      keyMap.set(dedupeKey, row);
+      keyMap.set(uniqueKey, row);
     }
   });
 
   const deduped = Array.from(keyMap.values());
-  deduped.unshift(headers); // reinsert headers
+  deduped.unshift(headers); // Restore headers
 
   sheet.clearContents();
   sheet.getRange(1, 1, deduped.length, deduped[0].length).setValues(deduped);
 
   const removed = rows.length - keyMap.size;
-  Logger.log(`🧹 Deduplication complete. Removed ${removed} duplicate row(s). Kept ${keyMap.size}.`);
+  Logger.log(`🧹 Deduplication complete using UniqueKey. Removed ${removed} row(s), kept ${keyMap.size}.`);
 }
+
+//Helper functions follow
 
 function injectArchiveHeaders() {
   const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
@@ -247,10 +243,6 @@ function injectArchiveHeaders() {
 
   Logger.log("🧾 Header row injected at the top of Archive_Test.");
 }
-
-
-
-//Helper functions follow
 
 function promptForFiscalMonth(defaultFM) {
   const ui = SpreadsheetApp.getUi();
@@ -290,5 +282,3 @@ function previewAndRunLoader() {
 
   Logger.log("✅ Full loader run with manual input complete.");
 }
-
-
