@@ -7,6 +7,8 @@ function batchGenerateAndArchive() {
 
   loadOntracToArchive(batchID, fiscalMonth);
   loadBVTtoArchive(batchID, fiscalMonth);
+  loadQCtoArchive(batchID, fiscalMonth);
+
   deduplicateArchive();
 
   Logger.log("✅ Batch archive load complete.");
@@ -224,6 +226,69 @@ function loadBVTtoArchive(batchID, fiscalMonth) {
   archiveSheet.clearContents();
   archiveSheet.getRange(1, 1, archiveData.length, maxCols).setValues(archiveData);
   Logger.log(`🧬 BVT Enrichment complete: updated ${updates} row(s).`);
+}
+
+function loadQCtoArchive(batchID, fiscalMonth) {
+  const sourceSheetId = "1hLx5vKUsnKvCaa5Xu-UgGWG_2zzX0V6em1jmumnx7Ko";
+  const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
+  const sourceSS = SpreadsheetApp.openById(sourceSheetId);
+  const targetSS = SpreadsheetApp.openById(targetSheetId);
+  const archiveSheet = targetSS.getSheetByName("Archive_Test");
+
+  const archiveData = archiveSheet.getDataRange().getValues();
+  const archiveKeyMap = new Map(); // region_techID -> row index
+
+  for (let i = 1; i < archiveData.length; i++) {
+    const row = archiveData[i];
+    const region = row[2];
+    const techID = String(row[4]).trim();
+    const compositeKey = `${region}_${techID}`;
+    archiveKeyMap.set(compositeKey, i);
+  }
+
+  const qcTabs = sourceSS.getSheets()
+    .map(s => s.getName())
+    .filter(name => name.startsWith("QC_"));
+
+  let updates = 0;
+
+  qcTabs.forEach(tabName => {
+    const sheet = sourceSS.getSheetByName(tabName);
+    const region = tabName.split("_").slice(1).join("_").trim();
+    const numRows = sheet.getLastRow() - 2;
+    if (numRows <= 0) return;
+
+    const techIDs = sheet.getRange(3, 1, numRows, 1).getValues(); // Col A
+    const data = sheet.getRange(3, 2, numRows, 6).getValues();     // Col B–G
+
+    for (let i = 0; i < numRows; i++) {
+      const techID = String(techIDs[i][0]).trim();
+      if (!techID || techID.toLowerCase().includes("total")) continue;
+
+      const lookupKey = `${region}_${techID}`;
+      const archiveRowIndex = archiveKeyMap.get(lookupKey);
+      Logger.log(`🔍 QC Match Attempt: ${lookupKey} → Found: ${archiveRowIndex !== undefined}`);
+
+      if (archiveRowIndex === undefined) continue;
+
+      const archiveRow = archiveData[archiveRowIndex];
+      for (let j = 0; j < data[i].length; j++) {
+        archiveRow[44 + j] = data[i][j]; // Columns AS–AW (indexes 44–48)
+      }
+
+      updates++;
+    }
+  });
+
+  // ✅ Pad rows to max column count
+  const maxCols = Math.max(...archiveData.map(r => r.length));
+  archiveData.forEach(row => {
+    while (row.length < maxCols) row.push('');
+  });
+
+  archiveSheet.clearContents();
+  archiveSheet.getRange(1, 1, archiveData.length, maxCols).setValues(archiveData);
+  Logger.log(`🧬 QC Enrichment complete: updated ${updates} row(s).`);
 }
 
 
