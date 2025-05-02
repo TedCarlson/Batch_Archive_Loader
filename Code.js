@@ -6,6 +6,7 @@ function batchGenerateAndArchive() {
   const fiscalMonth = promptForFiscalMonth(defaultFM);
 
   loadOntracToArchive(batchID, fiscalMonth);
+  loadBVTtoArchive(batchID, fiscalMonth);
   deduplicateArchive();
 
   Logger.log("✅ Batch archive load complete.");
@@ -109,50 +110,7 @@ function previewOntracDataRows() {
   });
 }
 
-function deduplicateArchive() {
-  const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
-  const ss = SpreadsheetApp.openById(targetSheetId);
-  const sheet = ss.getSheetByName("Archive_Test");
-
-  if (!sheet) throw new Error("❌ 'Archive_Test' not found.");
-
-  const data = sheet.getDataRange().getValues();
-  if (data.length <= 1) {
-    Logger.log("⚠️ Archive_Test has no data rows.");
-    return;
-  }
-
-  const headers = data[0];
-  const rows = data.slice(1);
-  const keyMap = new Map();
-
-  rows.forEach(row => {
-    const batchID = row[0];
-    const fiscalMonth = row[1];
-    const techID = row[4];
-
-    // ✅ Safer footer check (only skip if techID is a string AND contains "total")
-    if (typeof techID === 'string' && techID.toLowerCase().includes("total")) return;
-
-    // 🧠 Dedupe key: fiscalMonth + techID
-    const dedupeKey = `${fiscalMonth}_${techID}`;
-    const existing = keyMap.get(dedupeKey);
-
-    if (!existing || batchID > existing[0]) {
-      keyMap.set(dedupeKey, row);
-    }
-  });
-
-  const deduped = Array.from(keyMap.values());
-  deduped.unshift(headers);
-
-  sheet.clearContents();
-  sheet.getRange(1, 1, deduped.length, deduped[0].length).setValues(deduped);
-
-  const removed = rows.length - keyMap.size;
-  Logger.log(`🧹 Dedup complete by FiscalMonth + TechID. Removed ${removed} row(s), kept ${keyMap.size}.`);
-}
-
+// Primary loadMetricToArchive Functions
 
 function loadOntracToArchive(batchID, fiscalMonth) {
   const sourceSheetId = "1hLx5vKUsnKvCaa5Xu-UgGWG_2zzX0V6em1jmumnx7Ko";
@@ -205,7 +163,117 @@ function loadOntracToArchive(batchID, fiscalMonth) {
   }
 }
 
+function loadBVTtoArchive(batchID, fiscalMonth) {
+  const sourceSheetId = "1hLx5vKUsnKvCaa5Xu-UgGWG_2zzX0V6em1jmumnx7Ko";
+  const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
+  const sourceSS = SpreadsheetApp.openById(sourceSheetId);
+  const targetSS = SpreadsheetApp.openById(targetSheetId);
+  const archiveSheet = targetSS.getSheetByName("Archive_Test");
+
+  const archiveData = archiveSheet.getDataRange().getValues();
+  const archiveKeyMap = new Map(); // region_techID -> row index
+
+  for (let i = 1; i < archiveData.length; i++) {
+    const row = archiveData[i];
+    const region = row[2];
+    const techID = String(row[4]).trim();
+    const compositeKey = `${region}_${techID}`;
+    archiveKeyMap.set(compositeKey, i);
+  }
+
+  const bvtTabs = sourceSS.getSheets()
+    .map(s => s.getName())
+    .filter(name => name.startsWith("BVT_"));
+
+  let updates = 0;
+
+  bvtTabs.forEach(tabName => {
+    const sheet = sourceSS.getSheetByName(tabName);
+    const region = tabName.split("_").slice(1).join("_").trim();
+    const numRows = sheet.getLastRow() - 2;
+    if (numRows <= 0) return;
+
+    const techIDs = sheet.getRange(3, 1, numRows, 1).getValues(); // Col A
+    const data = sheet.getRange(3, 2, numRows, 5).getValues();     // Col B–F
+
+    for (let i = 0; i < numRows; i++) {
+      const techID = String(techIDs[i][0]).trim();
+      if (!techID || techID.toLowerCase().includes("total")) continue;
+
+      const lookupKey = `${region}_${techID}`;
+      const archiveRowIndex = archiveKeyMap.get(lookupKey);
+      Logger.log(`🔍 BVT Match Attempt: ${lookupKey} → Found: ${archiveRowIndex !== undefined}`);
+
+      if (archiveRowIndex === undefined) continue;
+
+      const archiveRow = archiveData[archiveRowIndex];
+      for (let j = 0; j < data[i].length; j++) {
+        archiveRow[39 + j] = data[i][j]; // Columns AN–AR (index 39–43)
+      }
+
+      updates++;
+    }
+  });
+
+  // ✅ Pad all rows to same column count to prevent errors
+  const maxCols = Math.max(...archiveData.map(r => r.length));
+  archiveData.forEach(row => {
+    while (row.length < maxCols) row.push('');
+  });
+
+  archiveSheet.clearContents();
+  archiveSheet.getRange(1, 1, archiveData.length, maxCols).setValues(archiveData);
+  Logger.log(`🧬 BVT Enrichment complete: updated ${updates} row(s).`);
+}
+
+
 //Helper functions follow
+
+function deduplicateArchive() {
+  const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
+  const ss = SpreadsheetApp.openById(targetSheetId);
+  const sheet = ss.getSheetByName("Archive_Test");
+
+  if (!sheet) throw new Error("❌ 'Archive_Test' not found.");
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    Logger.log("⚠️ Archive_Test has no data rows.");
+    return;
+  }
+
+  const headers = data[0];
+  const rows = data.slice(1);
+  const keyMap = new Map();
+
+  rows.forEach(row => {
+    const batchID = row[0];
+    const fiscalMonth = row[1];
+    const techID = row[4];
+
+    // ✅ Safer footer check (only skip if techID is a string AND contains "total")
+    if (typeof techID === 'string' && techID.toLowerCase().includes("total")) return;
+
+    // 🧠 Dedupe key: fiscalMonth + techID
+    const dedupeKey = `${fiscalMonth}_${techID}`;
+    const existing = keyMap.get(dedupeKey);
+
+    if (!existing || batchID > existing[0]) {
+      keyMap.set(dedupeKey, row);
+    }
+  });
+
+  const deduped = Array.from(keyMap.values());
+  deduped.unshift(headers);
+
+  sheet.clearContents();
+  sheet.getRange(1, 1, deduped.length, deduped[0].length).setValues(deduped);
+
+  const removed = rows.length - keyMap.size;
+  Logger.log(`🧹 Dedup complete by FiscalMonth + TechID. Removed ${removed} row(s), kept ${keyMap.size}.`);
+}
+
+
 
 function injectArchiveHeaders() {
   const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
