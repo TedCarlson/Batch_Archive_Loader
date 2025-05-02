@@ -109,25 +109,50 @@ function previewOntracDataRows() {
   });
 }
 
-function auditOntracHeaders() {
-  const sourceSheetId = "1hLx5vKUsnKvCaa5Xu-UgGWG_2zzX0V6em1jmumnx7Ko";
-  const ss = SpreadsheetApp.openById(sourceSheetId);
-  const ontracTabs = ss.getSheets()
-    .map(s => s.getName())
-    .filter(name => name.startsWith("Ontrac_"));
+function deduplicateArchive() {
+  const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
+  const ss = SpreadsheetApp.openById(targetSheetId);
+  const sheet = ss.getSheetByName("Archive_Test");
 
-  ontracTabs.forEach(name => {
-    const sheet = ss.getSheetByName(name);
-    const { region } = extractMetadata(name);
-    const lastCol = sheet.getLastColumn();
-    const headers = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
+  if (!sheet) throw new Error("❌ 'Archive_Test' not found.");
 
-    Logger.log(`🔎 Headers for ${region}:`);
-    headers.forEach((header, index) => {
-      Logger.log(`  Col ${index + 1}: ${header}`);
-    });
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    Logger.log("⚠️ Archive_Test has no data rows.");
+    return;
+  }
+
+  const headers = data[0];
+  const rows = data.slice(1);
+  const keyMap = new Map();
+
+  rows.forEach(row => {
+    const batchID = row[0];
+    const fiscalMonth = row[1];
+    const techID = row[4];
+
+    // ✅ Safer footer check (only skip if techID is a string AND contains "total")
+    if (typeof techID === 'string' && techID.toLowerCase().includes("total")) return;
+
+    // 🧠 Dedupe key: fiscalMonth + techID
+    const dedupeKey = `${fiscalMonth}_${techID}`;
+    const existing = keyMap.get(dedupeKey);
+
+    if (!existing || batchID > existing[0]) {
+      keyMap.set(dedupeKey, row);
+    }
   });
+
+  const deduped = Array.from(keyMap.values());
+  deduped.unshift(headers);
+
+  sheet.clearContents();
+  sheet.getRange(1, 1, deduped.length, deduped[0].length).setValues(deduped);
+
+  const removed = rows.length - keyMap.size;
+  Logger.log(`🧹 Dedup complete by FiscalMonth + TechID. Removed ${removed} row(s), kept ${keyMap.size}.`);
 }
+
 
 function loadOntracToArchive(batchID, fiscalMonth) {
   const sourceSheetId = "1hLx5vKUsnKvCaa5Xu-UgGWG_2zzX0V6em1jmumnx7Ko";
@@ -178,43 +203,6 @@ function loadOntracToArchive(batchID, fiscalMonth) {
   } else {
     Logger.log("⚠️ No rows to write.");
   }
-}
-
-function deduplicateArchive() {
-  const targetSheetId = "19zuCKxg_4Akn9CpubsAKk1ejdXqSo0id0K9s9nxAStw";
-  const ss = SpreadsheetApp.openById(targetSheetId);
-  const sheet = ss.getSheetByName("Archive_Test");
-
-  if (!sheet) throw new Error("❌ 'Archive_Test' not found.");
-
-  const data = sheet.getDataRange().getValues();
-  if (data.length <= 1) {
-    Logger.log("⚠️ Archive_Test has no data rows.");
-    return;
-  }
-
-  const headers = data[0];
-  const rows = data.slice(1); // skip headers
-  const keyMap = new Map();
-
-  rows.forEach(row => {
-    const batchID = row[0];       // Col A
-    const uniqueKey = row[5];     // Col F (BatchID, FiscalMonth, Region, Source, TechID, UniqueKey...)
-
-    const existing = keyMap.get(uniqueKey);
-    if (!existing || batchID > existing[0]) {
-      keyMap.set(uniqueKey, row);
-    }
-  });
-
-  const deduped = Array.from(keyMap.values());
-  deduped.unshift(headers); // Restore headers
-
-  sheet.clearContents();
-  sheet.getRange(1, 1, deduped.length, deduped[0].length).setValues(deduped);
-
-  const removed = rows.length - keyMap.size;
-  Logger.log(`🧹 Deduplication complete using UniqueKey. Removed ${removed} row(s), kept ${keyMap.size}.`);
 }
 
 //Helper functions follow
